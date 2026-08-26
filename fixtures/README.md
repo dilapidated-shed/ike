@@ -8,7 +8,7 @@ one main idea while retaining the earlier ones.
 | `01-file-target` | A default target creates a file. |
 | `02-prerequisite` | A target depends on a source file. |
 | `03-variables` | Variables and the automatic variable `$@`. |
-| `04-pattern-rule` | Substitution, a pattern rule, `$<`, and multiple outputs. |
+| `04-pattern-rule` | Substitution, a pattern rule, `$<`, and multiple derived files. |
 | `05-include` | A Makefile includes a separate configuration fragment. |
 
 Every fixture also has a phony `clean` target so the harness can compare a
@@ -23,4 +23,3 @@ compiler.
 Large Makefiles do not belong in this directory. Real-world compatibility
 cases will be catalogued separately, with their origin and the behavior they
 are meant to exercise.
-
