@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -gt 1 ]; then
+    echo "usage: ike-parse [Makefile]" >&2
+    exit 2
+fi
+
+makefile=${1:-Makefile}
+cat "$makefile"
+

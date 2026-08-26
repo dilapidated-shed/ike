@@ -1,0 +1,112 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/ike-test.XXXXXX")
+trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+failures=0
+
+run_one()
+{
+    implementation=$1
+    workspace=$2
+    observation=$3
+    shift 3
+
+    if (
+        cd "$workspace"
+        if [ "$implementation" = make ]; then
+            make "$@"
+        else
+            sh "$root/bin/ike-parse" Makefile |
+                sh "$root/bin/ike-make" "$@"
+        fi
+    ) >"$observation.stdout" 2>"$observation.stderr"
+    then
+        status=0
+    else
+        status=$?
+    fi
+
+    printf '%s\n' "$status" >"$observation.status"
+}
+
+compare_file()
+{
+    description=$1
+    expected=$2
+    actual=$3
+
+    if diff -u "$expected" "$actual"; then
+        return 0
+    fi
+
+    echo "not ok - $description" >&2
+    failures=$((failures + 1))
+    return 0
+}
+
+compare_phase()
+{
+    fixture_name=$1
+    phase=$2
+    native_observation=$3
+    ike_observation=$4
+    native_workspace=$5
+    ike_workspace=$6
+    failures_before=$failures
+
+    compare_file "$fixture_name $phase exit status" \
+        "$native_observation.status" "$ike_observation.status"
+    compare_file "$fixture_name $phase standard output" \
+        "$native_observation.stdout" "$ike_observation.stdout"
+    compare_file "$fixture_name $phase standard error" \
+        "$native_observation.stderr" "$ike_observation.stderr"
+
+    if diff -ru "$native_workspace" "$ike_workspace"; then
+        :
+    else
+        echo "not ok - $fixture_name $phase files" >&2
+        failures=$((failures + 1))
+    fi
+
+    if [ "$failures" -eq "$failures_before" ]; then
+        echo "ok - $fixture_name $phase"
+    fi
+}
+
+for fixture in "$root"/fixtures/[0-9][0-9]-*
+do
+    fixture_name=${fixture##*/}
+    native_workspace="$temporary/$fixture_name/make"
+    ike_workspace="$temporary/$fixture_name/ike"
+    mkdir -p "$native_workspace" "$ike_workspace"
+    cp -R "$fixture"/. "$native_workspace"/
+    cp -R "$fixture"/. "$ike_workspace"/
+
+    for phase in build repeat clean
+    do
+        native_observation="$temporary/$fixture_name/make-$phase"
+        ike_observation="$temporary/$fixture_name/ike-$phase"
+
+        if [ "$phase" = clean ]; then
+            set -- clean
+        else
+            set --
+        fi
+
+        run_one make "$native_workspace" "$native_observation" "$@"
+        run_one ike "$ike_workspace" "$ike_observation" "$@"
+        compare_phase "$fixture_name" "$phase" \
+            "$native_observation" "$ike_observation" \
+            "$native_workspace" "$ike_workspace"
+    done
+done
+
+if [ "$failures" -ne 0 ]; then
+    echo "$failures comparison(s) failed" >&2
+    exit 1
+fi
+
+echo "all Make compatibility observations agree"

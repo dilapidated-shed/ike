@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+# Stage zero: GNU Make remains the oracle. A real Ike evaluator will replace
+# this delegation one observable behavior at a time.
+exec make -f - "$@"
+
