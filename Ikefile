@@ -1,0 +1,5 @@
+ike depends on ike.c
+    cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike
+
+test depends on ike tests/basic.sh
+    sh tests/basic.sh
