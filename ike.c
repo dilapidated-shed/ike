@@ -184,6 +184,13 @@ static int run_recipe(const char *command)
     return WEXITSTATUS(status);
 }
 
+static int mtime_is_newer(const struct stat *left, const struct stat *right)
+{
+    if (left->st_mtim.tv_sec != right->st_mtim.tv_sec)
+        return left->st_mtim.tv_sec > right->st_mtim.tv_sec;
+    return left->st_mtim.tv_nsec > right->st_mtim.tv_nsec;
+}
+
 static int build_rule(Build *build, Rule *rule)
 {
     if (rule->state == 2)
@@ -216,7 +223,7 @@ static int build_rule(Build *build, Rule *rule)
             return 1;
         }
 
-        if (!target_exists || dep_stat.st_mtime > target_stat.st_mtime)
+        if (!target_exists || mtime_is_newer(&dep_stat, &target_stat))
             needs_build = 1;
     }
 

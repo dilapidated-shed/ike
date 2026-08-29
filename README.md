@@ -15,6 +15,8 @@ print.o depends on print.c
 
 Version 1 treats `depends on` as exact syntax. The first target is the default target. Indented lines are shell recipes. Dependencies can be files or other targets. Ike rebuilds a target when it is missing or when a dependency is newer, and refuses missing dependencies and dependency cycles.
 
+Ike follows the selected target's dependencies from left to right. A target reached more than once is built at most once per invocation. Rules outside the selected target's dependency closure are not built.
+
 There are deliberately no variables, pattern rules, implicit rules, or fuzzy English yet.
 
 ## Bootstrap
