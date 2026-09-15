@@ -73,9 +73,13 @@ jobs:
           set -euo pipefail
           cc=$(command -v cc)
           test -x "$cc"
-          cd "$GITHUB_WORKSPACE"
-          "$GREASE_PYTHON" "$GREASE_SOURCE/bin/oils_for_unix.py" ysh -c \
-            "$cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike"
+          ike_root="$GITHUB_WORKSPACE"
+          (
+            cd "$GREASE_SOURCE"
+            "$GREASE_PYTHON" bin/oils_for_unix.py ysh -c \
+              "$cc -std=c11 -Wall -Wextra -Wpedantic -O2 $ike_root/ike.c -o $ike_root/ike"
+          )
+          cd "$ike_root"
           test -x ike
           ./ike test
           {
