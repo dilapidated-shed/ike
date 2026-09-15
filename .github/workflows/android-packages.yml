@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Check out exact source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install pinned Android NDK
         shell: bash
@@ -43,6 +45,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          source_sha=$(git rev-parse HEAD)
+          expected_source_sha='${{ github.event.pull_request.head.sha || github.sha }}'
+          test "$source_sha" = "$expected_source_sha"
 
           ndk="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
           toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -69,7 +75,7 @@ jobs:
             printf '%s\n' "$header" | grep -E "Machine:.*$machine_pattern" >/dev/null
             printf '%s\n' "$header" | grep -E 'Type:.*DYN' >/dev/null
 
-            printf '%s\n' "$GITHUB_SHA" > "$stage/share/ike/source-commit"
+            printf '%s\n' "$source_sha" > "$stage/share/ike/source-commit"
             printf '%s\n' "$target" > "$stage/share/ike/package-target"
             printf '%s\n' "$abi" > "$stage/share/ike/package-abi"
             printf '%s\n' "$NDK_VERSION" > "$stage/share/ike/ndk-version"
@@ -101,7 +107,7 @@ jobs:
       - name: Upload package evidence
         uses: actions/upload-artifact@v4
         with:
-          name: ike-android-${{ github.sha }}
+          name: ike-android-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             dist/ike-phone-armeabi-v7a.tar.gz
             dist/ike-phone-armeabi-v7a.tar.gz.sha256
@@ -116,7 +122,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          short=${GITHUB_SHA:0:12}
+          source_sha=$(git rev-parse HEAD)
+          test "$source_sha" = "$GITHUB_SHA"
+          short=${source_sha:0:12}
           tag="ike-android-$short"
           assets=(
             dist/ike-phone-armeabi-v7a.tar.gz
@@ -130,8 +138,8 @@ jobs:
           else
             gh release create "$tag" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
+              --target "$source_sha" \
               --prerelease \
               --title "Ike Android packages $short" \
-              --notes "NDK-cross-compiled Ike packages for exact source commit $GITHUB_SHA. This proves build/package/publication only; emulator and physical phone/tablet execution remain separate evidence."
+              --notes "NDK-cross-compiled Ike packages for exact source commit $source_sha. This proves build/package/publication only; emulator and physical phone/tablet execution remain separate evidence."
           fi
