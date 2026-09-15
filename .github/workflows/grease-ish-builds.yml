@@ -1,0 +1,179 @@
+name: Grease and Ish builds
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grease:
+    name: Build Ike through Grease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact Ike head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out exact Grease source
+        uses: actions/checkout@v4
+        with:
+          repository: isomorphisms/grease
+          ref: 56d100a676ba3c96844ec44602ca87e8c3b689f2
+          path: _grease
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build the pinned Grease host launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          grease_root="$GITHUB_WORKSPACE/_grease"
+          source_root="$grease_root/source"
+          build_root="$RUNNER_TEMP/grease"
+          python_build="$build_root/python2"
+          python_prefix="$build_root/python2-prefix"
+          python="$python_build/python"
+
+          mkdir -p "$build_root/bin"
+          cp -R "$source_root/Python-2.7.13" "$python_build"
+          (
+            cd "$python_build"
+            touch Include/Python-ast.h Python/Python-ast.c
+            ./configure --prefix="$python_prefix" --without-ensurepip
+            make -j2 python
+            make -j2 sharedmods
+            make inclinstall
+          )
+          ln -s "$python" "$build_root/bin/python2"
+
+          (
+            cd "$source_root"
+            PATH="$build_root/bin:$PATH"
+            export PATH
+            ./configure
+            build/stamp.sh write-git-commit
+            build/py.sh py-source
+            build/py.sh pylibc
+            build/py.sh posix_
+            build/py.sh fanos
+            build/py.sh fastfunc
+          )
+
+          printf 'GREASE_PYTHON=%s\n' "$python" >> "$GITHUB_ENV"
+          printf 'GREASE_SOURCE=%s\n' "$source_root" >> "$GITHUB_ENV"
+          printf 'GREASE_SOURCE_REF=%s\n' "$(git -C "$source_root" rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Have Grease launch the Ike compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc=$(command -v cc)
+          test -x "$cc"
+          cd "$GITHUB_WORKSPACE"
+          "$GREASE_PYTHON" "$GREASE_SOURCE/bin/oils_for_unix.py" ysh -c \
+            "$cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike"
+          test -x ike
+          ./ike test
+          {
+            printf 'schema\tike-shell-build-v1\n'
+            printf 'ike_source_ref\t%s\n' "$(git rev-parse HEAD)"
+            printf 'driver\tgrease\n'
+            printf 'driver_ref\t%s\n' '56d100a676ba3c96844ec44602ca87e8c3b689f2'
+            printf 'driver_source_ref\t%s\n' "$GREASE_SOURCE_REF"
+            printf 'compiler\t%s\n' "$cc"
+            printf 'compile_result\tPASS\n'
+            printf 'ike_behavior_result\tPASS\n'
+            printf 'recipe_shell\tPOSIX-system()\n'
+          } > grease-build-receipt.tsv
+
+      - name: Upload Grease build receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: ike-grease-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ike
+            grease-build-receipt.tsv
+          if-no-files-found: error
+
+  ish:
+    name: Build Ike through Ish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact Ike head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out exact Ish source
+        uses: actions/checkout@v4
+        with:
+          repository: isomorphisms/grease
+          ref: c322db3fc3da26c1b84824eb61ed5dfbda9c1d11
+          path: _ish
+          persist-credentials: false
+
+      - name: Read and check out Ish's exact Idriç pin
+        id: idric
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(sed -n 's/^revision = "\([0-9a-f][0-9a-f]*\)"$/\1/p' _ish/_/idric.lock)
+          test -n "$revision"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact Idriç source
+        uses: actions/checkout@v4
+        with:
+          repository: isomorphisms/Idric
+          ref: ${{ steps.idric.outputs.revision }}
+          path: _idric
+          persist-credentials: false
+
+      - name: Bootstrap Idriç and build Ish
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./_idric/_/edric bootstrap
+          IDRIS2_PREFIX="$GITHUB_WORKSPACE/_idric/_/bootstrap-build" \
+          IDRIC="$GITHUB_WORKSPACE/_idric/_/build/exec/idris2" \
+          CHEZ="$GITHUB_WORKSPACE/_idric/_/.tools/bin/scheme" \
+            make -C _ish/_ build/exec/ish
+          test -x _ish/_/build/exec/ish
+
+      - name: Have Ish launch the Ike compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc=$(command -v cc)
+          test -x "$cc"
+          source_file="$RUNNER_TEMP/build-ike.ish"
+          printf '%s -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike\n' "$cc" > "$source_file"
+          cd "$GITHUB_WORKSPACE"
+          "$GITHUB_WORKSPACE/_ish/_/build/exec/ish" "$source_file"
+          test -x ike
+          ./ike test
+          {
+            printf 'schema\tike-shell-build-v1\n'
+            printf 'ike_source_ref\t%s\n' "$(git rev-parse HEAD)"
+            printf 'driver\tish\n'
+            printf 'driver_ref\t%s\n' 'c322db3fc3da26c1b84824eb61ed5dfbda9c1d11'
+            printf 'idric_ref\t%s\n' '${{ steps.idric.outputs.revision }}'
+            printf 'compiler\t%s\n' "$cc"
+            printf 'compile_result\tPASS\n'
+            printf 'ike_behavior_result\tPASS\n'
+            printf 'recipe_shell\tPOSIX-system()\n'
+          } > ish-build-receipt.tsv
+
+      - name: Upload Ish build receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: ike-ish-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ike
+            ish-build-receipt.tsv
+          if-no-files-found: error
