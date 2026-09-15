@@ -61,3 +61,32 @@ jobs:
             ${{ matrix.archive }}.sha256
             ${{ matrix.archive }}.receipt.txt
           if-no-files-found: error
+
+  publish:
+    name: publish exact-head prerelease
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish immutable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="android-${GITHUB_SHA:0:12}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $tag already exists; leaving it unchanged"
+            exit 0
+          fi
+          mapfile -t files < <(find dist -type f -print | sort)
+          test "${#files[@]}" -eq 6
+          gh release create "$tag" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Ike Android ${GITHUB_SHA:0:12}" \
+            --notes "Cross-built Android packages for exact commit $GITHUB_SHA. Physical-device execution is not claimed."
