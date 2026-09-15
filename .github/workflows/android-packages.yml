@@ -1,0 +1,92 @@
+name: Android packages
+
+on:
+  pull_request:
+  push:
+    branches:
+      - android-packages-v2
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: phone-armv7
+            abi: armeabi-v7a
+            target: armv7a-linux-androideabi24
+            archive: ike-armv7-android.tar.gz
+          - name: tablet-aarch64
+            abi: arm64-v8a
+            target: aarch64-linux-android24
+            archive: ike-aarch64-android.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Ike for Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.target }}-clang"
+          test -x "$cc"
+          mkdir -p package/bin
+          "$cc" -std=c11 -Wall -Wextra -Wpedantic -O2 -fPIE -pie ike.c -o package/bin/ike
+          file package/bin/ike
+          case "${{ matrix.abi }}" in
+            armeabi-v7a) file package/bin/ike | grep -Eq 'ELF 32-bit.*ARM' ;;
+            arm64-v8a) file package/bin/ike | grep -Eq 'ELF 64-bit.*ARM aarch64' ;;
+          esac
+      - name: Package immutable payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C package -czf "${{ matrix.archive }}" bin/ike
+          sha256sum "${{ matrix.archive }}" > "${{ matrix.archive }}.sha256"
+          {
+            printf 'commit: %s\n' "$GITHUB_SHA"
+            printf 'package.target: %s\n' '${{ matrix.name }}'
+            printf 'package.abi: %s\n' '${{ matrix.abi }}'
+            printf 'package.archive: %s\n' '${{ matrix.archive }}'
+            sha256sum "${{ matrix.archive }}"
+          } > "${{ matrix.archive }}.receipt.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+            ${{ matrix.archive }}.receipt.txt
+          if-no-files-found: error
+
+  publish:
+    name: publish exact-head prerelease
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish immutable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="android-${GITHUB_SHA:0:12}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $tag already exists; leaving it unchanged"
+            exit 0
+          fi
+          mapfile -t files < <(find dist -type f -print | sort)
+          test "${#files[@]}" -eq 6
+          gh release create "$tag" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Ike Android ${GITHUB_SHA:0:12}" \
+            --notes "Cross-built Android packages for exact commit $GITHUB_SHA. Physical-device execution is not claimed."
