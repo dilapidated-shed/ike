@@ -76,6 +76,8 @@ jobs:
           ike_root="$GITHUB_WORKSPACE"
           (
             cd "$GREASE_SOURCE"
+            PYTHONPATH="$GREASE_SOURCE:$GREASE_SOURCE/vendor"
+            export PYTHONPATH
             "$GREASE_PYTHON" bin/oils_for_unix.py ysh -c \
               "$cc -std=c11 -Wall -Wextra -Wpedantic -O2 $ike_root/ike.c -o $ike_root/ike"
           )
