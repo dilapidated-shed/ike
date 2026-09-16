@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   grease:
-    name: Build Ike through Grease
+    name: Build and run Ike through Grease
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -84,8 +84,33 @@ jobs:
           cd "$ike_root"
           test -x ike
           ./ike test
+
+          grease_runner="$RUNNER_TEMP/grease-runner"
           {
-            printf 'schema\tike-shell-build-v1\n'
+            printf '%s\n' '#!/bin/sh'
+            printf 'PYTHONPATH="%s:%s/vendor"\n' "$GREASE_SOURCE" "$GREASE_SOURCE"
+            printf '%s\n' 'export PYTHONPATH'
+            printf 'exec "%s" "%s/bin/oils_for_unix.py" ysh "$@"\n' \
+              "$GREASE_PYTHON" "$GREASE_SOURCE"
+          } > "$grease_runner"
+          chmod 0755 "$grease_runner"
+
+          fixture="$RUNNER_TEMP/ike-grease-recipe"
+          rm -rf "$fixture"
+          mkdir -p "$fixture"
+          cd "$fixture"
+          printf 'grease\n' > input.txt
+          cp_bin=$(command -v cp)
+          printf 'output.txt depends on input.txt\n    %s input.txt output.txt\n' \
+            "$cp_bin" > Ikefile
+          IKE_RECIPE_RUNNER="$grease_runner" "$ike_root/ike" output.txt > recipe.log
+          test "$(cat output.txt)" = grease
+          grep -Fqx "$cp_bin input.txt output.txt" recipe.log
+          cp recipe.log "$ike_root/grease-recipe.log"
+
+          cd "$ike_root"
+          {
+            printf 'schema\tike-shell-build-v2\n'
             printf 'ike_source_ref\t%s\n' "$(git rev-parse HEAD)"
             printf 'driver\tgrease\n'
             printf 'driver_ref\t%s\n' '56d100a676ba3c96844ec44602ca87e8c3b689f2'
@@ -93,7 +118,10 @@ jobs:
             printf 'compiler\t%s\n' "$cc"
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
-            printf 'recipe_shell\tPOSIX-system()\n'
+            printf 'default_recipe_runner\tPOSIX-system()\n'
+            printf 'external_recipe_runner\tgrease\n'
+            printf 'recipe_runner_protocol\tsource-file\n'
+            printf 'recipe_runner_result\tPASS\n'
           } > grease-build-receipt.tsv
 
       - name: Upload Grease build receipt
@@ -103,10 +131,11 @@ jobs:
           path: |
             ike
             grease-build-receipt.tsv
+            grease-recipe.log
           if-no-files-found: error
 
   ish:
-    name: Build Ike through Ish
+    name: Build and run Ike through Ish
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -151,7 +180,7 @@ jobs:
             make -C _ish/_ build/exec/ish
           test -x _ish/_/build/exec/ish
 
-      - name: Have Ish launch the Ike compilation
+      - name: Have Ish launch the Ike compilation and one recipe
         shell: bash
         run: |
           set -euo pipefail
@@ -163,8 +192,24 @@ jobs:
           "$GITHUB_WORKSPACE/_ish/_/build/exec/ish" "$source_file"
           test -x ike
           ./ike test
+
+          ish_runner="$GITHUB_WORKSPACE/_ish/_/build/exec/ish"
+          fixture="$RUNNER_TEMP/ike-ish-recipe"
+          rm -rf "$fixture"
+          mkdir -p "$fixture"
+          cd "$fixture"
+          printf 'ish\n' > input.txt
+          cp_bin=$(command -v cp)
+          printf 'output.txt depends on input.txt\n    %s input.txt output.txt\n' \
+            "$cp_bin" > Ikefile
+          IKE_RECIPE_RUNNER="$ish_runner" "$GITHUB_WORKSPACE/ike" output.txt > recipe.log
+          test "$(cat output.txt)" = ish
+          grep -Fqx "$cp_bin input.txt output.txt" recipe.log
+          cp recipe.log "$GITHUB_WORKSPACE/ish-recipe.log"
+
+          cd "$GITHUB_WORKSPACE"
           {
-            printf 'schema\tike-shell-build-v1\n'
+            printf 'schema\tike-shell-build-v2\n'
             printf 'ike_source_ref\t%s\n' "$(git rev-parse HEAD)"
             printf 'driver\tish\n'
             printf 'driver_ref\t%s\n' 'c322db3fc3da26c1b84824eb61ed5dfbda9c1d11'
@@ -172,7 +217,11 @@ jobs:
             printf 'compiler\t%s\n' "$cc"
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
-            printf 'recipe_shell\tPOSIX-system()\n'
+            printf 'default_recipe_runner\tPOSIX-system()\n'
+            printf 'external_recipe_runner\tish\n'
+            printf 'recipe_runner_protocol\tsource-file\n'
+            printf 'recipe_runner_subset\texact-path-literal-arguments\n'
+            printf 'recipe_runner_result\tPASS\n'
           } > ish-build-receipt.tsv
 
       - name: Upload Ish build receipt
@@ -182,4 +231,5 @@ jobs:
           path: |
             ike
             ish-build-receipt.tsv
+            ish-recipe.log
           if-no-files-found: error

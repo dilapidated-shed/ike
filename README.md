@@ -13,9 +13,23 @@ print.o depends on print.c
     cc -c print.c -o print.o
 ```
 
-Version 1 treats `depends on` as exact syntax. The first target is the default target. Indented lines are shell recipes. Dependencies can be files or other targets. Ike rebuilds a target when it is missing or when a dependency is newer, and refuses missing dependencies and dependency cycles.
+Version 1 treats `depends on` as exact syntax. The first target is the default target. Indented lines are recipes. Dependencies can be files or other targets. Ike rebuilds a target when it is missing or when a dependency is newer, and refuses missing dependencies and dependency cycles.
 
 Ike follows the selected target's dependencies from left to right. A target reached more than once is built at most once per invocation. Rules outside the selected target's dependency closure are not built.
+
+By default, recipes retain the original POSIX `system()` execution boundary. To use another recipe interpreter, set `IKE_RECIPE_RUNNER` to its absolute executable path:
+
+```sh
+IKE_RECIPE_RUNNER=/absolute/path/to/runner ./ike target
+```
+
+For each recipe, Ike writes exactly that recipe line plus a newline to a private temporary source file and executes:
+
+```text
+/absolute/path/to/runner temporary-source-file
+```
+
+Ike does not add `-c`, parse runner options, or reinterpret the recipe. This source-file protocol is intentionally small enough for the maintained Ish milestone as well as Grease. A recipe still has to stay within the syntax implemented by the selected runner.
 
 There are deliberately no variables, pattern rules, implicit rules, or fuzzy English yet.
 

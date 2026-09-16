@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 typedef struct {
     char *target;
@@ -23,6 +24,7 @@ typedef struct {
     Rule *rules;
     size_t count;
     size_t capacity;
+    const char *recipe_runner;
 } Build;
 
 static void die(const char *message)
@@ -171,17 +173,106 @@ static void parse_ikefile(Build *build, const char *path)
         die("Ikefile contains no targets");
 }
 
-static int run_recipe(const char *command)
+static int status_code(int status)
+{
+    if (!WIFEXITED(status))
+        return 1;
+    return WEXITSTATUS(status);
+}
+
+static char *recipe_source_path(void)
+{
+    const char *temporary_directory = getenv("TMPDIR");
+    if (temporary_directory == NULL || *temporary_directory == '\0')
+        temporary_directory = "/tmp";
+
+    size_t directory_length = strlen(temporary_directory);
+    int needs_slash = temporary_directory[directory_length - 1] != '/';
+    const char *name = "ike-recipe-XXXXXX";
+    size_t size = directory_length + (size_t)needs_slash + strlen(name) + 1;
+    char *path = xrealloc(NULL, size);
+
+    snprintf(path, size, "%s%s%s", temporary_directory,
+             needs_slash ? "/" : "", name);
+    return path;
+}
+
+static int run_recipe_with_runner(const char *runner, const char *command)
+{
+    char *source_path = recipe_source_path();
+    int source = mkstemp(source_path);
+    if (source == -1) {
+        fprintf(stderr, "ike: cannot create recipe source: %s\n",
+                strerror(errno));
+        free(source_path);
+        return 1;
+    }
+
+    FILE *file = fdopen(source, "w");
+    if (file == NULL) {
+        fprintf(stderr, "ike: cannot open recipe source: %s\n",
+                strerror(errno));
+        close(source);
+        unlink(source_path);
+        free(source_path);
+        return 1;
+    }
+
+    int write_failed = fprintf(file, "%s\n", command) < 0;
+    if (fclose(file) != 0)
+        write_failed = 1;
+    if (write_failed) {
+        fprintf(stderr, "ike: cannot write recipe source: %s\n",
+                strerror(errno));
+        unlink(source_path);
+        free(source_path);
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child == -1) {
+        fprintf(stderr, "ike: cannot start recipe runner: %s\n",
+                strerror(errno));
+        unlink(source_path);
+        free(source_path);
+        return 1;
+    }
+
+    if (child == 0) {
+        execl(runner, runner, source_path, (char *)NULL);
+        fprintf(stderr, "ike: cannot execute recipe runner %s: %s\n",
+                runner, strerror(errno));
+        _exit(126);
+    }
+
+    int status;
+    while (waitpid(child, &status, 0) == -1) {
+        if (errno == EINTR)
+            continue;
+        fprintf(stderr, "ike: cannot wait for recipe runner: %s\n",
+                strerror(errno));
+        unlink(source_path);
+        free(source_path);
+        return 1;
+    }
+
+    unlink(source_path);
+    free(source_path);
+    return status_code(status);
+}
+
+static int run_recipe(const char *runner, const char *command)
 {
     printf("%s\n", command);
     fflush(stdout);
 
+    if (runner != NULL)
+        return run_recipe_with_runner(runner, command);
+
     int status = system(command);
     if (status == -1)
         return 1;
-    if (!WIFEXITED(status))
-        return 1;
-    return WEXITSTATUS(status);
+    return status_code(status);
 }
 
 static int mtime_is_newer(const struct stat *left, const struct stat *right)
@@ -229,7 +320,7 @@ static int build_rule(Build *build, Rule *rule)
 
     if (needs_build) {
         for (size_t i = 0; i < rule->recipe_count; i++) {
-            int status = run_recipe(rule->recipes[i]);
+            int status = run_recipe(build->recipe_runner, rule->recipes[i]);
             if (status != 0) {
                 fprintf(stderr, "ike: recipe for '%s' failed with status %d\n",
                         rule->target, status);
@@ -250,6 +341,17 @@ int main(int argc, char **argv)
     }
 
     Build build = {0};
+    build.recipe_runner = getenv("IKE_RECIPE_RUNNER");
+    if (build.recipe_runner != NULL && *build.recipe_runner == '\0')
+        build.recipe_runner = NULL;
+    if (build.recipe_runner != NULL && build.recipe_runner[0] != '/')
+        die("IKE_RECIPE_RUNNER must be an absolute path");
+    if (build.recipe_runner != NULL && access(build.recipe_runner, X_OK) != 0) {
+        fprintf(stderr, "ike: recipe runner is not executable: %s: %s\n",
+                build.recipe_runner, strerror(errno));
+        return 1;
+    }
+
     parse_ikefile(&build, "Ikefile");
 
     Rule *goal = argc == 2 ? find_rule(&build, argv[1]) : &build.rules[0];

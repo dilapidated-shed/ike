@@ -61,6 +61,42 @@ EOF
 [ ! -s diamond-second.log ]
 [ "$(cat diamond-order.log)" = "$(printf 'leaf\nleft\nright\nfinal\n')" ]
 
+runner="$tmp/runner"
+cat > "$runner" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$#" -eq 1 ]
+printf '%s\n' "$1" > "$IKE_TEST_SOURCE_PATH"
+printf 'run\n' >> "$IKE_TEST_RUNNER_LOG"
+exec /bin/sh "$1"
+EOF
+chmod 0755 "$runner"
+printf 'runner\n' > runner-input.txt
+cp_bin=$(command -v cp)
+printf 'runner-output.txt depends on runner-input.txt\n    %s runner-input.txt runner-output.txt\n' \
+    "$cp_bin" > Ikefile
+IKE_TEST_RUNNER_LOG="$tmp/runner.log" \
+IKE_TEST_SOURCE_PATH="$tmp/source-path" \
+IKE_RECIPE_RUNNER="$runner" \
+    "$ike_bin" runner-output.txt > runner-first.log
+[ "$(cat runner-output.txt)" = "runner" ]
+[ "$(cat runner.log)" = "run" ]
+[ "$(wc -l < runner-first.log | tr -d ' ')" = "1" ]
+[ ! -e "$(cat source-path)" ]
+IKE_TEST_RUNNER_LOG="$tmp/runner.log" \
+IKE_TEST_SOURCE_PATH="$tmp/source-path" \
+IKE_RECIPE_RUNNER="$runner" \
+    "$ike_bin" runner-output.txt > runner-second.log
+[ ! -s runner-second.log ]
+[ "$(cat runner.log)" = "run" ]
+
+if IKE_RECIPE_RUNNER=relative-runner "$ike_bin" runner-output.txt \
+    > runner-relative.out 2> runner-relative.err; then
+    echo "expected relative recipe runner to fail" >&2
+    exit 1
+fi
+grep -Fqx 'ike: IKE_RECIPE_RUNNER must be an absolute path' runner-relative.err
+
 cat > Ikefile <<'EOF'
 artifact depends upon source
     touch artifact
