@@ -62,6 +62,11 @@ EOF
 [ ! -s diamond-second.log ]
 [ "$(cat diamond-order.log)" = "$(printf 'leaf\nleft\nright\nfinal\n')" ]
 
+hex_text()
+{
+    printf '%s' "$1" | od -An -tx1 | tr -d ' \n'
+}
+
 runner="$tmp/runner"
 cat > "$runner" <<'EOF'
 #!/bin/sh
@@ -76,14 +81,21 @@ printf 'runner\n' > runner-input.txt
 cp_bin=$(command -v cp)
 printf 'runner-output.txt depends on runner-input.txt\n    %s runner-input.txt runner-output.txt\n' \
     "$cp_bin" > Ikefile
+runner_receipt="$tmp/runner-receipt.tsv"
 IKE_TEST_RUNNER_LOG="$tmp/runner.log" \
 IKE_TEST_SOURCE_PATH="$tmp/source-path" \
 IKE_RECIPE_RUNNER="$runner" \
+IKE_RECEIPT="$runner_receipt" \
+IKE_IKEFILE_IDENTITY='fixture:runner-v1' \
     "$ike_bin" runner-output.txt > runner-first.log
 [ "$(cat runner-output.txt)" = "runner" ]
 [ "$(cat runner.log)" = "run" ]
 [ "$(wc -l < runner-first.log | tr -d ' ')" = "1" ]
 [ ! -e "$(cat source-path)" ]
+runner_identity_hex=$(hex_text "$runner")
+grep -Fqx 'recipe_runner_mode	external-source-file' "$runner_receipt"
+grep -Fqx "recipe_runner_identity_hex	$runner_identity_hex" "$runner_receipt"
+grep -Fqx 'final_result	PASS' "$runner_receipt"
 IKE_TEST_RUNNER_LOG="$tmp/runner.log" \
 IKE_TEST_SOURCE_PATH="$tmp/source-path" \
 IKE_RECIPE_RUNNER="$runner" \
@@ -98,11 +110,6 @@ if IKE_RECIPE_RUNNER=relative-runner "$ike_bin" runner-output.txt \
 fi
 grep -Fqx 'ike: IKE_RECIPE_RUNNER must be an absolute path' runner-relative.err
 
-
-hex_text()
-{
-    printf '%s' "$1" | od -An -tx1 | tr -d ' \n'
-}
 
 printf 'receipt\n' > receipt-input.txt
 cat > Ikefile <<'EOF'
