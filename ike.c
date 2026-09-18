@@ -25,6 +25,8 @@ typedef struct {
     size_t count;
     size_t capacity;
     const char *recipe_runner;
+    FILE *receipt;
+    size_t receipt_event;
 } Build;
 
 static void die(const char *message)
@@ -173,6 +175,109 @@ static void parse_ikefile(Build *build, const char *path)
         die("Ikefile contains no targets");
 }
 
+static void receipt_hex(FILE *file, const char *text)
+{
+    const unsigned char *cursor = (const unsigned char *)text;
+    while (*cursor != '\0') {
+        fprintf(file, "%02x", (unsigned int)*cursor);
+        cursor++;
+    }
+}
+
+static int receipt_text(FILE *file, const char *key, const char *value)
+{
+    if (fprintf(file, "%s\t", key) < 0)
+        return 1;
+    receipt_hex(file, value);
+    if (fputc('\n', file) == EOF)
+        return 1;
+    return ferror(file) != 0;
+}
+
+static int start_receipt(Build *build, const char *path,
+                         const char *ikefile_identity,
+                         const char *selected_target)
+{
+    build->receipt = fopen(path, "w");
+    if (build->receipt == NULL) {
+        fprintf(stderr, "ike: cannot open receipt %s: %s\n",
+                path, strerror(errno));
+        return 1;
+    }
+
+    const char *runner_mode =
+        build->recipe_runner == NULL ? "posix-system" : "external-source-file";
+    const char *runner_identity =
+        build->recipe_runner == NULL ? "POSIX-system()" : build->recipe_runner;
+
+    if (fprintf(build->receipt, "schema\tike-build-v1\n") < 0 ||
+        receipt_text(build->receipt, "selected_target_hex",
+                     selected_target) != 0 ||
+        receipt_text(build->receipt, "ikefile_identity_hex",
+                     ikefile_identity) != 0 ||
+        fprintf(build->receipt, "recipe_runner_mode\t%s\n",
+                runner_mode) < 0 ||
+        receipt_text(build->receipt, "recipe_runner_identity_hex",
+                     runner_identity) != 0) {
+        fprintf(stderr, "ike: cannot write receipt %s\n", path);
+        fclose(build->receipt);
+        build->receipt = NULL;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int receipt_rule(Build *build, const char *target)
+{
+    if (build->receipt == NULL)
+        return 0;
+
+    if (fprintf(build->receipt, "rule\t%zu\t", build->receipt_event++) < 0)
+        return 1;
+    receipt_hex(build->receipt, target);
+    if (fputc('\n', build->receipt) == EOF)
+        return 1;
+    return ferror(build->receipt) != 0;
+}
+
+static int receipt_recipe(Build *build, const char *target,
+                          const char *recipe, int status)
+{
+    if (build->receipt == NULL)
+        return 0;
+
+    if (fprintf(build->receipt, "recipe\t%zu\t",
+                build->receipt_event++) < 0)
+        return 1;
+    receipt_hex(build->receipt, target);
+    if (fputc('\t', build->receipt) == EOF)
+        return 1;
+    receipt_hex(build->receipt, recipe);
+    if (fprintf(build->receipt, "\t%d\n", status) < 0)
+        return 1;
+    return ferror(build->receipt) != 0;
+}
+
+static int finish_receipt(Build *build, int result)
+{
+    if (build->receipt == NULL)
+        return result;
+
+    int failed =
+        fprintf(build->receipt, "final_result\t%s\n",
+                result == 0 ? "PASS" : "FAIL") < 0;
+    if (fclose(build->receipt) != 0)
+        failed = 1;
+    build->receipt = NULL;
+
+    if (failed) {
+        fprintf(stderr, "ike: cannot finish receipt\n");
+        return 1;
+    }
+    return result;
+}
+
 static int status_code(int status)
 {
     if (!WIFEXITED(status))
@@ -319,8 +424,18 @@ static int build_rule(Build *build, Rule *rule)
     }
 
     if (needs_build) {
+        if (receipt_rule(build, rule->target) != 0) {
+            fprintf(stderr, "ike: cannot write receipt\n");
+            return 1;
+        }
+
         for (size_t i = 0; i < rule->recipe_count; i++) {
             int status = run_recipe(build->recipe_runner, rule->recipes[i]);
+            if (receipt_recipe(build, rule->target, rule->recipes[i],
+                               status) != 0) {
+                fprintf(stderr, "ike: cannot write receipt\n");
+                return 1;
+            }
             if (status != 0) {
                 fprintf(stderr, "ike: recipe for '%s' failed with status %d\n",
                         rule->target, status);
@@ -360,5 +475,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    return build_rule(&build, goal);
+    const char *receipt_path = getenv("IKE_RECEIPT");
+    if (receipt_path != NULL && *receipt_path == '\0')
+        receipt_path = NULL;
+
+    if (receipt_path != NULL) {
+        const char *ikefile_identity = getenv("IKE_IKEFILE_IDENTITY");
+        if (ikefile_identity == NULL || *ikefile_identity == '\0')
+            die("IKE_IKEFILE_IDENTITY is required when IKE_RECEIPT is set");
+        if (start_receipt(&build, receipt_path, ikefile_identity,
+                          goal->target) != 0)
+            return 1;
+    }
+
+    int result = build_rule(&build, goal);
+    return finish_receipt(&build, result);
 }
