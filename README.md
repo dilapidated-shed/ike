@@ -31,6 +31,28 @@ For each recipe, Ike writes exactly that recipe line plus a newline to a private
 
 Ike does not add `-c`, parse runner options, or reinterpret the recipe. This source-file protocol is intentionally small enough for the maintained Ish milestone as well as Grease. A recipe still has to stay within the syntax implemented by the selected runner.
 
+## Build receipts
+
+Set `IKE_RECEIPT` to request a versioned execution receipt and
+`IKE_IKEFILE_IDENTITY` to the identity anchored by the caller:
+
+```sh
+IKE_RECEIPT=/tmp/ike.tsv \
+IKE_IKEFILE_IDENTITY=sha256:<caller-checked-digest> \
+    ./ike target
+```
+
+The `ike-build-v1` TSV receipt records the selected target, the caller-supplied
+Ikefile identity, the recipe-runner mode and identity, each rule and recipe that
+actually executes in order, every recipe exit status, and the final PASS/FAIL
+result. Free-form text fields are lowercase hexadecimal bytes so tabs and other
+recipe characters cannot change the record structure.
+
+The receipt is evidence, not self-authenticating proof. A consumer must pin the
+Ike source it compiled, independently anchor the Ikefile identity, and verify the
+receipt and produced effects. Requesting a receipt without an Ikefile identity is
+a hard error; receipt write failure also makes the build fail.
+
 There are deliberately no variables, pattern rules, implicit rules, or fuzzy English yet.
 
 ## Bootstrap
