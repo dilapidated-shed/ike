@@ -34,6 +34,10 @@ ICK := $(STAGE)/bin/$(GNU_TARGET)-gcc
 ICK_OBJECT := $(BUILD_ROOT)/$(ABI)/ike.ick.o
 NDK_TOOLCHAIN := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64
 SYSROOT := $(NDK_TOOLCHAIN)/sysroot
+# Bionic's documented opt-out retains the real signed ioctl declaration.
+# Its convenience overload requires Clang-only overloadable/enable_if syntax;
+# ICK compiles the source and the NDK driver remains an object-only linker.
+ICK_HEADER_FLAGS := -DBIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD
 
 .PHONY: all
 all: $(OUTPUT)
@@ -56,7 +60,7 @@ $(ICK): $(OBJECTS)/Makefile
 
 $(ICK_OBJECT): $(REPOSITORY_ROOT)/ike.c $(ICK)
 	test -x "$(NDK_TOOLCHAIN)/bin/$(NDK_COMPILER)"
-	$(ICK) $(ICK_ABI_FLAGS) -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -fPIE -D__ANDROID__ -D__ANDROID_API__=$(ANDROID_API) --sysroot="$(SYSROOT)" -nostdinc -isystem "$$($(ICK) -print-file-name=include)" -isystem "$(SYSROOT)/usr/include" -isystem "$(SYSROOT)/usr/include/$(NDK_TRIPLE)" -c "$<" -o "$@"
+	$(ICK) $(ICK_ABI_FLAGS) $(ICK_HEADER_FLAGS) -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -fPIE -D__ANDROID__ -D__ANDROID_API__=$(ANDROID_API) --sysroot="$(SYSROOT)" -nostdinc -isystem "$$($(ICK) -print-file-name=include)" -isystem "$(SYSROOT)/usr/include" -isystem "$(SYSROOT)/usr/include/$(NDK_TRIPLE)" -c "$<" -o "$@"
 	sha256sum "$(REPOSITORY_ROOT)/ike.c" "$@" > "$(BUILD_ROOT)/$(ABI)/source-and-object.sha256"
 
 $(OUTPUT): $(ICK_OBJECT)
