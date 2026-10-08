@@ -1,0 +1,6 @@
+actions_pinned	IKE-NATIVE-ACTION-PINS	.github/workflows/ci.yml
+actions_pinned	IKE-SHELL-ACTION-PINS	.github/workflows/grease-ish-builds.yml
+actions_pinned	IKE-ANDROID-ACTION-PINS	.github/workflows/android-packages.yml
+yaml_primary_checkout_ref	IKE-NATIVE-EXACT-HEAD	.github/workflows/ci.yml	${{ github.event.pull_request.head.sha || github.sha }}
+yaml_primary_checkout_ref	IKE-SHELL-EXACT-HEAD	.github/workflows/grease-ish-builds.yml	${{ github.event.pull_request.head.sha || github.sha }}
+yaml_primary_checkout_ref	IKE-ANDROID-EXACT-HEAD	.github/workflows/android-packages.yml	${{ github.event.pull_request.head.sha || github.sha }}
