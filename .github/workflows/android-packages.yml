@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: dilapidated-shed/ick
-          ref: c5d28dde9cc333a562b907785d0370b725146cdf
+          ref: c61e448251744a2f40ad743ebef1a027bdcd2f9d
           path: _ick
           submodules: true
           persist-credentials: false
@@ -89,7 +89,7 @@ jobs:
             printf '%s\n' "$abi" > "$stage/share/ike/package-abi"
             printf '%s\n' "$NDK_VERSION" > "$stage/share/ike/ndk-version"
             printf '%s\n' 'ICK' > "$stage/share/ike/c-compiler-family"
-            printf '%s\n' 'c5d28dde9cc333a562b907785d0370b725146cdf' > "$stage/share/ike/c-compiler-source"
+            printf '%s\n' 'c61e448251744a2f40ad743ebef1a027bdcd2f9d' > "$stage/share/ike/c-compiler-source"
             cp "_/build/android-ick/$abi/source-and-object.sha256" "$stage/share/ike/source-and-object.sha256"
 
             (

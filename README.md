@@ -63,7 +63,7 @@ Set `ICK` to that same compiler path before invoking `./ike`.  Ike then builds
 itself from its own `Ikefile`; compiler selection is an explicit environment
 input rather than a silent host-compiler choice.
 
-The native CI producer pins ICK's `←` and `×` frontend and separately declares
+The native CI producer pins ICK's `←`, `×`, and `÷` frontend and separately declares
 its prebuilt host startup/runtime boundary.  Android packages compile the same
 maintained source with cross ICK and use the pinned NDK for headers, final
 linking, and runtime libraries.  Package construction and device execution
@@ -86,3 +86,10 @@ The test target also compares 13 parser edge cases against the frozen original
 in `_/tests/reference/ike.c`, with both executables compiled by ICK.  The
 inherited POSIX behavior fixtures exercise Ike's declared recipe protocol;
 they are separate from Grease and Ish's actual launcher/runner checks.
+
+The 2026-10-09 division migration changes the maintained parser scenario-count
+calculation to `÷`. Its producer pins ICK
+`c61e448251744a2f40ad743ebef1a027bdcd2f9d`. The complete `./ike test` target
+passed using that frontend: the original behavior/receipt suite returned `ok`,
+and all 13 parser scenarios matched across 26 executions. The frozen source
+and the shell-language fixtures remain unchanged.

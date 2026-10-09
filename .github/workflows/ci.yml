@@ -15,7 +15,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: isomorphisms/ai-ci/ick-host@f538ed81669ceb2d521b65fc3b3af7c2e51dd2f2
+      - uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
         id: ick
       - name: Bootstrap Ike
         env:
@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/ai-ci
-          ref: f538ed81669ceb2d521b65fc3b3af7c2e51dd2f2
+          ref: ba3ff90023b09e525313793554edecf2141ff95b
           path: _/ci/ai-ci
           persist-credentials: false
       - name: Enforce assignment arrows in converted C

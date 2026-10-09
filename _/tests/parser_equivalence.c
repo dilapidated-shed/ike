@@ -118,7 +118,7 @@ int main(int argument_count, char **arguments)
 
     int failed ← 0;
     for (size_t scenario_index ← 0;
-         scenario_index < sizeof scenarios / sizeof scenarios[0];
+         scenario_index < sizeof scenarios ÷ sizeof scenarios[0];
          scenario_index++) {
         const parser_scenario *scenario ← &scenarios[scenario_index];
         replace_private_source(scenario);

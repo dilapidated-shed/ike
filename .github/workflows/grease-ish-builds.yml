@@ -68,7 +68,7 @@ jobs:
           printf 'GREASE_SOURCE_REF=%s\n' "$(git -C "$source_root" rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Build the pinned ICK consumer compiler
-        uses: isomorphisms/ai-ci/ick-host@f538ed81669ceb2d521b65fc3b3af7c2e51dd2f2
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
         id: ick
 
       - name: Have Grease launch the Ike compilation
@@ -122,7 +122,7 @@ jobs:
             printf 'driver_ref\t%s\n' '56d100a676ba3c96844ec44602ca87e8c3b689f2'
             printf 'driver_source_ref\t%s\n' "$GREASE_SOURCE_REF"
             printf 'compiler\t%s\n' "$cc"
-            printf 'ick_ref\tc5d28dde9cc333a562b907785d0370b725146cdf\n'
+            printf 'ick_ref\tc61e448251744a2f40ad743ebef1a027bdcd2f9d\n'
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
             printf 'default_recipe_runner\tPOSIX-system()\n'
@@ -188,7 +188,7 @@ jobs:
           test -x _ish/_/build/exec/ish
 
       - name: Build the pinned ICK consumer compiler
-        uses: isomorphisms/ai-ci/ick-host@f538ed81669ceb2d521b65fc3b3af7c2e51dd2f2
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
         id: ick
 
       - name: Have Ish launch the Ike compilation and one recipe
@@ -228,7 +228,7 @@ jobs:
             printf 'driver_ref\t%s\n' 'c322db3fc3da26c1b84824eb61ed5dfbda9c1d11'
             printf 'idric_ref\t%s\n' '${{ steps.idric.outputs.revision }}'
             printf 'compiler\t%s\n' "$cc"
-            printf 'ick_ref\tc5d28dde9cc333a562b907785d0370b725146cdf\n'
+            printf 'ick_ref\tc61e448251744a2f40ad743ebef1a027bdcd2f9d\n'
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
             printf 'default_recipe_runner\tPOSIX-system()\n'
