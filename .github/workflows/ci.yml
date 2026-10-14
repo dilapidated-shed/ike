@@ -8,16 +8,41 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
+        id: ick
       - name: Bootstrap Ike
-        run: cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike
+        env:
+          ICK: ${{ steps.ick.outputs.compiler }}
+        run: '"$ICK" -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike'
       - name: Check forced self-rebuild
+        env:
+          ICK: ${{ steps.ick.outputs.compiler }}
         run: |
           sleep 1
           touch ike.c
-          test "$(./ike)" = "cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike"
+          test "$(./ike)" = '"$ICK" -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike'
           test -z "$(./ike)"
       - name: Run behavior checks through Ike
+        env:
+          ICK: ${{ steps.ick.outputs.compiler }}
         run: ./ike test
+      - name: Check out the pinned converted-source guard
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/ai-ci
+          ref: ba3ff90023b09e525313793554edecf2141ff95b
+          path: _/ci/ai-ci
+          persist-credentials: false
+      - name: Enforce assignment arrows in converted C
+        run: make -f _/ci/ai-ci/c-source/Makefile check ICK="${{ steps.ick.outputs.compiler }}" ICK_LINK_FLAGS="${{ steps.ick.outputs.link_flags }}" FILES="ike.c _/tests/parser_equivalence.c tests/aici-fixture/verifier.c"
+      - name: Verify the exact-head qualification contract
+        run: |
+          "${{ steps.ick.outputs.compiler }}" ${{ steps.ick.outputs.link_flags }} -std=c17 -O2 -Wall -Wextra -Werror _/ci/ai-ci/src/aici.c -o "$RUNNER_TEMP/aici-icky"
+          "$RUNNER_TEMP/aici-icky" suite _/ci/suite.tsv .

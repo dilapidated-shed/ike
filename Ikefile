@@ -1,5 +1,14 @@
 ike depends on ike.c
-    cc -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike
+    "$ICK" -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike
 
-test depends on ike tests/basic.sh
+_/build/parser-equivalence depends on _/tests/parser_equivalence.c
+    mkdir -p _/build
+    "$ICK" -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 _/tests/parser_equivalence.c -o _/build/parser-equivalence
+
+_/build/reference-ike depends on _/tests/reference/ike.c
+    mkdir -p _/build
+    "$ICK" -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 _/tests/reference/ike.c -o _/build/reference-ike
+
+test depends on ike tests/basic.sh _/build/parser-equivalence _/build/reference-ike
     sh tests/basic.sh
+    _/build/parser-equivalence _/build/reference-ike ./ike

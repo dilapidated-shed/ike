@@ -19,13 +19,25 @@ env:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
     steps:
       - name: Check out exact source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out the pinned cross ICK source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: dilapidated-shed/ick
+          ref: c61e448251744a2f40ad743ebef1a027bdcd2f9d
+          path: _ick
+          submodules: true
+          persist-credentials: false
+
+      - name: Install cross compiler bootstrap dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential flex bison texinfo libgmp-dev libmpfr-dev libmpc-dev binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu
 
       - name: Install pinned Android NDK
         shell: bash
@@ -57,17 +69,14 @@ jobs:
           package_target() {
             local target=$1
             local abi=$2
-            local compiler=$3
-            local machine_pattern=$4
-            local archive=$5
+            local machine_pattern=$3
+            local archive=$4
             local stage="dist/stage-$target"
 
             rm -rf "$stage"
             mkdir -p "$stage/bin" "$stage/share/ike"
 
-            "$toolchain/$compiler" \
-              -std=c11 -Wall -Wextra -Wpedantic -O2 -fPIE -pie \
-              ike.c -o "$stage/bin/ike"
+            make -f _/android/Makefile ABI="$abi" NDK="$ndk" OUTPUT="$stage/bin/ike"
             "$toolchain/llvm-strip" "$stage/bin/ike"
 
             header=$($toolchain/llvm-readelf -h "$stage/bin/ike")
@@ -79,6 +88,9 @@ jobs:
             printf '%s\n' "$target" > "$stage/share/ike/package-target"
             printf '%s\n' "$abi" > "$stage/share/ike/package-abi"
             printf '%s\n' "$NDK_VERSION" > "$stage/share/ike/ndk-version"
+            printf '%s\n' 'ICK' > "$stage/share/ike/c-compiler-family"
+            printf '%s\n' 'c61e448251744a2f40ad743ebef1a027bdcd2f9d' > "$stage/share/ike/c-compiler-source"
+            cp "_/build/android-ick/$abi/source-and-object.sha256" "$stage/share/ike/source-and-object.sha256"
 
             (
               cd "$stage"
@@ -88,6 +100,9 @@ jobs:
                 share/ike/package-target \
                 share/ike/package-abi \
                 share/ike/ndk-version \
+                share/ike/c-compiler-family \
+                share/ike/c-compiler-source \
+                share/ike/source-and-object.sha256 \
                 > share/ike/manifest.sha256
             )
 
@@ -96,16 +111,16 @@ jobs:
           }
 
           package_target \
-            phone armeabi-v7a armv7a-linux-androideabi21-clang 'ARM' \
+            phone armeabi-v7a 'ARM' \
             ike-phone-armeabi-v7a.tar.gz
           package_target \
-            tablet arm64-v8a aarch64-linux-android21-clang 'AArch64' \
+            tablet arm64-v8a 'AArch64' \
             ike-tablet-arm64-v8a.tar.gz
 
           cat dist/*.sha256
 
       - name: Upload package evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ike-android-${{ github.event.pull_request.head.sha || github.sha }}
           path: |

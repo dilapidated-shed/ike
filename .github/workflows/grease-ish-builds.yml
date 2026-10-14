@@ -11,15 +11,15 @@ jobs:
   grease:
     name: Build and run Ike through Grease
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Check out exact Ike head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out exact Grease source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/grease
           ref: 56d100a676ba3c96844ec44602ca87e8c3b689f2
@@ -67,11 +67,17 @@ jobs:
           printf 'GREASE_SOURCE=%s\n' "$source_root" >> "$GITHUB_ENV"
           printf 'GREASE_SOURCE_REF=%s\n' "$(git -C "$source_root" rev-parse HEAD)" >> "$GITHUB_ENV"
 
+      - name: Build the pinned ICK consumer compiler
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
+        id: ick
+
       - name: Have Grease launch the Ike compilation
+        env:
+          ICK: ${{ steps.ick.outputs.compiler }}
         shell: bash
         run: |
           set -euo pipefail
-          cc=$(command -v cc)
+          cc="$ICK"
           test -x "$cc"
           ike_root="$GITHUB_WORKSPACE"
           (
@@ -79,7 +85,7 @@ jobs:
             PYTHONPATH="$GREASE_SOURCE:$GREASE_SOURCE/vendor"
             export PYTHONPATH
             "$GREASE_PYTHON" bin/oils_for_unix.py ysh -c \
-              "$cc -std=c11 -Wall -Wextra -Wpedantic -O2 $ike_root/ike.c -o $ike_root/ike"
+              "$cc -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -O2 $ike_root/ike.c -o $ike_root/ike"
           )
           cd "$ike_root"
           test -x ike
@@ -116,6 +122,7 @@ jobs:
             printf 'driver_ref\t%s\n' '56d100a676ba3c96844ec44602ca87e8c3b689f2'
             printf 'driver_source_ref\t%s\n' "$GREASE_SOURCE_REF"
             printf 'compiler\t%s\n' "$cc"
+            printf 'ick_ref\tc61e448251744a2f40ad743ebef1a027bdcd2f9d\n'
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
             printf 'default_recipe_runner\tPOSIX-system()\n'
@@ -125,7 +132,7 @@ jobs:
           } > grease-build-receipt.tsv
 
       - name: Upload Grease build receipt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ike-grease-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
@@ -137,15 +144,15 @@ jobs:
   ish:
     name: Build and run Ike through Ish
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Check out exact Ike head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out exact Ish source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/grease
           ref: c322db3fc3da26c1b84824eb61ed5dfbda9c1d11
@@ -162,7 +169,7 @@ jobs:
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
 
       - name: Check out exact Idriç source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/Idric
           ref: ${{ steps.idric.outputs.revision }}
@@ -180,14 +187,20 @@ jobs:
             make -C _ish/_ build/exec/ish
           test -x _ish/_/build/exec/ish
 
+      - name: Build the pinned ICK consumer compiler
+        uses: isomorphisms/ai-ci/ick-host@ba3ff90023b09e525313793554edecf2141ff95b
+        id: ick
+
       - name: Have Ish launch the Ike compilation and one recipe
+        env:
+          ICK: ${{ steps.ick.outputs.compiler }}
         shell: bash
         run: |
           set -euo pipefail
-          cc=$(command -v cc)
+          cc="$ICK"
           test -x "$cc"
           source_file="$RUNNER_TEMP/build-ike.ish"
-          printf '%s -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike\n' "$cc" > "$source_file"
+          printf '%s -fno-link-libatomic -std=c11 -Wall -Wextra -Wpedantic -O2 ike.c -o ike\n' "$cc" > "$source_file"
           cd "$GITHUB_WORKSPACE"
           "$GITHUB_WORKSPACE/_ish/_/build/exec/ish" "$source_file"
           test -x ike
@@ -215,6 +228,7 @@ jobs:
             printf 'driver_ref\t%s\n' 'c322db3fc3da26c1b84824eb61ed5dfbda9c1d11'
             printf 'idric_ref\t%s\n' '${{ steps.idric.outputs.revision }}'
             printf 'compiler\t%s\n' "$cc"
+            printf 'ick_ref\tc61e448251744a2f40ad743ebef1a027bdcd2f9d\n'
             printf 'compile_result\tPASS\n'
             printf 'ike_behavior_result\tPASS\n'
             printf 'default_recipe_runner\tPOSIX-system()\n'
@@ -225,7 +239,7 @@ jobs:
           } > ish-build-receipt.tsv
 
       - name: Upload Ish build receipt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ike-ish-${{ github.event.pull_request.head.sha || github.sha }}
           path: |

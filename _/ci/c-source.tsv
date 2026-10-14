@@ -1,0 +1,5 @@
+path	role	qualification
+ike.c	owned Icky C; source spans map to typed line definitions before graph effects	native behavior and parser preservation; Android build/link gate
+_/tests/parser_equivalence.c	owned Icky C CLI preservation harness	native 13 scenarios, 26 executions
+tests/aici-fixture/verifier.c	assignment-neutral compositional C protocol fixture	compiled and executed by ICK in basic behavior checks
+_/tests/reference/ike.c	immutable original at a92fe68bf8aad8dfcfe9f7a7abd84e07290f7fe0	frozen control; ordinary syntax is deliberate, outside converted-source guard

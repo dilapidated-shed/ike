@@ -10,24 +10,52 @@
 #include <unistd.h>
 
 typedef struct {
-    char *target;
-    char **deps;
-    size_t dep_count;
-    size_t dep_capacity;
-    char **recipes;
-    size_t recipe_count;
-    size_t recipe_capacity;
-    int state;
-} Rule;
+    char **values;
+    size_t count;
+    size_t capacity;
+} owned_string_sequence;
+
+typedef enum {
+    RULE_UNVISITED,
+    RULE_VISITING,
+    RULE_FINISHED
+} traversal_state;
 
 typedef struct {
-    Rule *rules;
+    char *target;
+    owned_string_sequence dependency_names;
+    owned_string_sequence recipe_lines;
+    traversal_state visit_state;
+} dependency_rule;
+
+typedef struct {
+    dependency_rule *rules;
     size_t count;
     size_t capacity;
     const char *recipe_runner;
     FILE *receipt;
     size_t receipt_event;
-} Build;
+} build_session;
+
+typedef struct {
+    const char *begin;
+    size_t length;
+} text_span;
+
+typedef enum {
+    SOURCE_IGNORED,
+    SOURCE_RECIPE,
+    SOURCE_RULE,
+    SOURCE_INVALID_RULE,
+    SOURCE_EMPTY_TARGET
+} source_line_kind;
+
+typedef struct {
+    source_line_kind kind;
+    text_span body;
+    text_span target;
+    text_span dependencies;
+} interpreted_source_line;
 
 static void die(const char *message)
 {
@@ -37,134 +65,195 @@ static void die(const char *message)
 
 static void *xrealloc(void *ptr, size_t size)
 {
-    void *next = realloc(ptr, size);
+    void *next ← realloc(ptr, size);
     if (next == NULL)
         die("out of memory");
     return next;
 }
 
-static char *xstrdup(const char *text)
+static text_span without_leading_space(text_span text)
 {
-    char *copy = strdup(text);
+    while (text.length > 0 && isspace((unsigned char)*text.begin)) {
+        text.begin++;
+        text.length--;
+    }
+    return text;
+}
+
+static text_span without_trailing_space(text_span text)
+{
+    while (text.length > 0 &&
+           isspace((unsigned char)text.begin[text.length - 1]))
+        text.length--;
+    return text;
+}
+
+/* Interpret one source line as a value before allocating graph state.
+   Recipes retain their exact normalized body; dependency tokens retain the
+   existing space/tab delimiter rule. */
+static interpreted_source_line interpret_source_line(const char *line)
+{
+    text_span whole ← {line, strlen(line)};
+    text_span body ← without_leading_space(without_trailing_space(whole));
+    interpreted_source_line interpreted ← {
+        .kind ← SOURCE_IGNORED,
+        .body ← body
+    };
+    if (body.length == 0 || body.begin[0] == '#')
+        return interpreted;
+    if (line[0] == ' ' || line[0] == '\t') {
+        interpreted.kind ← SOURCE_RECIPE;
+        return interpreted;
+    }
+
+    const char *marker ← strstr(body.begin, " depends on");
+    if (marker == NULL || (marker[11] != '\0' &&
+                          !isspace((unsigned char)marker[11]))) {
+        interpreted.kind ← SOURCE_INVALID_RULE;
+        return interpreted;
+    }
+
+    text_span target ← {body.begin, (size_t)(marker - body.begin)};
+    interpreted.target ← without_trailing_space(target);
+    if (interpreted.target.length == 0) {
+        interpreted.kind ← SOURCE_EMPTY_TARGET;
+        return interpreted;
+    }
+
+    /* An empty dependency tail is valid, including a trailing blank. */
+    size_t prefix_length ← (size_t)(marker - body.begin) + 11;
+    size_t dependency_length ←
+        prefix_length < body.length ? body.length - prefix_length : 0;
+    text_span dependencies ← {marker + 11, dependency_length};
+    interpreted.dependencies ← without_leading_space(dependencies);
+    interpreted.kind ← SOURCE_RULE;
+    return interpreted;
+}
+
+static char *owned_text(text_span text)
+{
+    char *copy ← strndup(text.begin, text.length);
     if (copy == NULL)
         die("out of memory");
     return copy;
 }
 
-static char *trim_left(char *text)
+static void append_owned_text(owned_string_sequence *sequence, text_span text)
 {
-    while (*text != '\0' && isspace((unsigned char)*text))
-        text++;
-    return text;
-}
-
-static void trim_right(char *text)
-{
-    size_t n = strlen(text);
-    while (n > 0 && isspace((unsigned char)text[n - 1]))
-        text[--n] = '\0';
-}
-
-static void add_string(char ***items, size_t *count, size_t *capacity,
-                       const char *value)
-{
-    if (*count == *capacity) {
-        *capacity = *capacity == 0 ? 4 : *capacity * 2;
-        *items = xrealloc(*items, *capacity * sizeof **items);
+    if (sequence->count == sequence->capacity) {
+        sequence->capacity ←
+            sequence->capacity == 0 ? 4 : sequence->capacity × 2;
+        sequence->values ←
+            xrealloc(sequence->values, sequence->capacity × sizeof *sequence->values);
     }
-    (*items)[(*count)++] = xstrdup(value);
+    sequence->values[sequence->count++] ← owned_text(text);
 }
 
-static Rule *find_rule(Build *build, const char *target)
+typedef struct {
+    text_span token;
+    text_span remaining;
+} dependency_token_step;
+
+static dependency_token_step next_dependency_token(text_span remaining)
 {
-    for (size_t i = 0; i < build->count; i++) {
-        if (strcmp(build->rules[i].target, target) == 0)
-            return &build->rules[i];
+    while (remaining.length > 0 &&
+           (remaining.begin[0] == ' ' || remaining.begin[0] == '\t')) {
+        remaining.begin++;
+        remaining.length--;
+    }
+    size_t token_length ← 0;
+    while (token_length < remaining.length &&
+           remaining.begin[token_length] != ' ' &&
+           remaining.begin[token_length] != '\t')
+        token_length++;
+    dependency_token_step step ← {
+        .token ← {remaining.begin, token_length},
+        .remaining ← {remaining.begin + token_length,
+                      remaining.length - token_length}
+    };
+    return step;
+}
+
+static void append_dependency_names(dependency_rule *rule, text_span dependencies)
+{
+    while (dependencies.length > 0) {
+        dependency_token_step step ← next_dependency_token(dependencies);
+        if (step.token.length > 0)
+            append_owned_text(&rule->dependency_names, step.token);
+        dependencies ← step.remaining;
+    }
+}
+
+static dependency_rule *find_rule(build_session *build, const char *target)
+{
+    for (size_t rule_index ← 0; rule_index < build->count; rule_index++) {
+        if (strcmp(build->rules[rule_index].target, target) == 0)
+            return &build->rules[rule_index];
     }
     return NULL;
 }
 
-static Rule *add_rule(Build *build, const char *target)
+static dependency_rule *add_rule(build_session *build, text_span target_text)
 {
+    char *target ← owned_text(target_text);
     if (find_rule(build, target) != NULL) {
         fprintf(stderr, "ike: duplicate target: %s\n", target);
         exit(1);
     }
 
     if (build->count == build->capacity) {
-        build->capacity = build->capacity == 0 ? 8 : build->capacity * 2;
-        build->rules = xrealloc(build->rules,
-                                build->capacity * sizeof *build->rules);
+        build->capacity ← build->capacity == 0 ? 8 : build->capacity × 2;
+        build->rules ← xrealloc(build->rules,
+                                build->capacity × sizeof *build->rules);
     }
 
-    Rule *rule = &build->rules[build->count++];
-    *rule = (Rule){0};
-    rule->target = xstrdup(target);
+    dependency_rule *rule ← &build->rules[build->count++];
+    *rule ← (dependency_rule){0};
+    rule->target ← target;
     return rule;
 }
 
-static void parse_ikefile(Build *build, const char *path)
+static void parse_ikefile(build_session *build, const char *path)
 {
-    FILE *file = fopen(path, "r");
+    FILE *file ← fopen(path, "r");
     if (file == NULL) {
         fprintf(stderr, "ike: cannot open %s: %s\n", path, strerror(errno));
         exit(1);
     }
 
-    char *line = NULL;
-    size_t line_capacity = 0;
+    char *line ← NULL;
+    size_t line_capacity ← 0;
     ssize_t length;
-    size_t line_number = 0;
-    Rule *current = NULL;
+    size_t line_number ← 0;
+    dependency_rule *current ← NULL;
 
-    while ((length = getline(&line, &line_capacity, file)) != -1) {
+    while ((length ← getline(&line, &line_capacity, file)) != -1) {
         (void)length;
         line_number++;
-        trim_right(line);
-
-        int indented = line[0] == ' ' || line[0] == '\t';
-        char *body = trim_left(line);
-        if (*body == '\0' || *body == '#')
-            continue;
-
-        if (indented) {
+        interpreted_source_line interpreted ← interpret_source_line(line);
+        switch (interpreted.kind) {
+        case SOURCE_IGNORED:
+            break;
+        case SOURCE_RECIPE:
             if (current == NULL) {
                 fprintf(stderr, "ike: %s:%zu: recipe without a target\n",
                         path, line_number);
                 exit(1);
             }
-            add_string(&current->recipes, &current->recipe_count,
-                       &current->recipe_capacity, body);
-            continue;
-        }
-
-        char *marker = strstr(body, " depends on");
-        if (marker == NULL || (marker[11] != '\0' &&
-                              !isspace((unsigned char)marker[11]))) {
+            append_owned_text(&current->recipe_lines, interpreted.body);
+            break;
+        case SOURCE_RULE:
+            current ← add_rule(build, interpreted.target);
+            append_dependency_names(current, interpreted.dependencies);
+            break;
+        case SOURCE_EMPTY_TARGET:
+            fprintf(stderr, "ike: %s:%zu: empty target\n", path, line_number);
+            exit(1);
+        case SOURCE_INVALID_RULE:
             fprintf(stderr,
                     "ike: %s:%zu: expected 'TARGET depends on DEPENDENCIES'\n",
                     path, line_number);
             exit(1);
-        }
-
-        char *deps = marker + 11;
-        *marker = '\0';
-        trim_right(body);
-        deps = trim_left(deps);
-
-        if (*body == '\0') {
-            fprintf(stderr, "ike: %s:%zu: empty target\n", path, line_number);
-            exit(1);
-        }
-
-        current = add_rule(build, body);
-
-        char *save = NULL;
-        for (char *dep = strtok_r(deps, " \t", &save);
-             dep != NULL;
-             dep = strtok_r(NULL, " \t", &save)) {
-            add_string(&current->deps, &current->dep_count,
-                       &current->dep_capacity, dep);
         }
     }
 
@@ -177,7 +266,7 @@ static void parse_ikefile(Build *build, const char *path)
 
 static void receipt_hex(FILE *file, const char *text)
 {
-    const unsigned char *cursor = (const unsigned char *)text;
+    const unsigned char *cursor ← (const unsigned char *)text;
     while (*cursor != '\0') {
         fprintf(file, "%02x", (unsigned int)*cursor);
         cursor++;
@@ -194,20 +283,20 @@ static int receipt_text(FILE *file, const char *key, const char *value)
     return ferror(file) != 0;
 }
 
-static int start_receipt(Build *build, const char *path,
+static int start_receipt(build_session *build, const char *path,
                          const char *ikefile_identity,
                          const char *selected_target)
 {
-    build->receipt = fopen(path, "w");
+    build->receipt ← fopen(path, "w");
     if (build->receipt == NULL) {
         fprintf(stderr, "ike: cannot open receipt %s: %s\n",
                 path, strerror(errno));
         return 1;
     }
 
-    const char *runner_mode =
+    const char *runner_mode ←
         build->recipe_runner == NULL ? "posix-system" : "external-source-file";
-    const char *runner_identity =
+    const char *runner_identity ←
         build->recipe_runner == NULL ? "POSIX-system()" : build->recipe_runner;
 
     if (fprintf(build->receipt, "schema\tike-build-v1\n") < 0 ||
@@ -221,14 +310,14 @@ static int start_receipt(Build *build, const char *path,
                      runner_identity) != 0) {
         fprintf(stderr, "ike: cannot write receipt %s\n", path);
         fclose(build->receipt);
-        build->receipt = NULL;
+        build->receipt ← NULL;
         return 1;
     }
 
     return 0;
 }
 
-static int receipt_rule(Build *build, const char *target)
+static int receipt_rule(build_session *build, const char *target)
 {
     if (build->receipt == NULL)
         return 0;
@@ -241,7 +330,7 @@ static int receipt_rule(Build *build, const char *target)
     return ferror(build->receipt) != 0;
 }
 
-static int receipt_recipe(Build *build, const char *target,
+static int receipt_recipe(build_session *build, const char *target,
                           const char *recipe, int status)
 {
     if (build->receipt == NULL)
@@ -259,17 +348,17 @@ static int receipt_recipe(Build *build, const char *target,
     return ferror(build->receipt) != 0;
 }
 
-static int finish_receipt(Build *build, int result)
+static int finish_receipt(build_session *build, int result)
 {
     if (build->receipt == NULL)
         return result;
 
-    int failed =
+    int failed ←
         fprintf(build->receipt, "final_result\t%s\n",
                 result == 0 ? "PASS" : "FAIL") < 0;
     if (fclose(build->receipt) != 0)
-        failed = 1;
-    build->receipt = NULL;
+        failed ← 1;
+    build->receipt ← NULL;
 
     if (failed) {
         fprintf(stderr, "ike: cannot finish receipt\n");
@@ -287,15 +376,15 @@ static int status_code(int status)
 
 static char *recipe_source_path(void)
 {
-    const char *temporary_directory = getenv("TMPDIR");
+    const char *temporary_directory ← getenv("TMPDIR");
     if (temporary_directory == NULL || *temporary_directory == '\0')
-        temporary_directory = "/tmp";
+        temporary_directory ← "/tmp";
 
-    size_t directory_length = strlen(temporary_directory);
-    int needs_slash = temporary_directory[directory_length - 1] != '/';
-    const char *name = "ike-recipe-XXXXXX";
-    size_t size = directory_length + (size_t)needs_slash + strlen(name) + 1;
-    char *path = xrealloc(NULL, size);
+    size_t directory_length ← strlen(temporary_directory);
+    int needs_slash ← temporary_directory[directory_length - 1] != '/';
+    const char *name ← "ike-recipe-XXXXXX";
+    size_t size ← directory_length + (size_t)needs_slash + strlen(name) + 1;
+    char *path ← xrealloc(NULL, size);
 
     snprintf(path, size, "%s%s%s", temporary_directory,
              needs_slash ? "/" : "", name);
@@ -304,8 +393,8 @@ static char *recipe_source_path(void)
 
 static int run_recipe_with_runner(const char *runner, const char *command)
 {
-    char *source_path = recipe_source_path();
-    int source = mkstemp(source_path);
+    char *source_path ← recipe_source_path();
+    int source ← mkstemp(source_path);
     if (source == -1) {
         fprintf(stderr, "ike: cannot create recipe source: %s\n",
                 strerror(errno));
@@ -313,7 +402,7 @@ static int run_recipe_with_runner(const char *runner, const char *command)
         return 1;
     }
 
-    FILE *file = fdopen(source, "w");
+    FILE *file ← fdopen(source, "w");
     if (file == NULL) {
         fprintf(stderr, "ike: cannot open recipe source: %s\n",
                 strerror(errno));
@@ -323,9 +412,9 @@ static int run_recipe_with_runner(const char *runner, const char *command)
         return 1;
     }
 
-    int write_failed = fprintf(file, "%s\n", command) < 0;
+    int write_failed ← fprintf(file, "%s\n", command) < 0;
     if (fclose(file) != 0)
-        write_failed = 1;
+        write_failed ← 1;
     if (write_failed) {
         fprintf(stderr, "ike: cannot write recipe source: %s\n",
                 strerror(errno));
@@ -334,7 +423,7 @@ static int run_recipe_with_runner(const char *runner, const char *command)
         return 1;
     }
 
-    pid_t child = fork();
+    pid_t child ← fork();
     if (child == -1) {
         fprintf(stderr, "ike: cannot start recipe runner: %s\n",
                 strerror(errno));
@@ -374,7 +463,7 @@ static int run_recipe(const char *runner, const char *command)
     if (runner != NULL)
         return run_recipe_with_runner(runner, command);
 
-    int status = system(command);
+    int status ← system(command);
     if (status == -1)
         return 1;
     return status_code(status);
@@ -387,23 +476,23 @@ static int mtime_is_newer(const struct stat *left, const struct stat *right)
     return left->st_mtim.tv_nsec > right->st_mtim.tv_nsec;
 }
 
-static int build_rule(Build *build, Rule *rule)
+static int build_rule(build_session *build, dependency_rule *rule)
 {
-    if (rule->state == 2)
+    if (rule->visit_state == RULE_FINISHED)
         return 0;
-    if (rule->state == 1) {
+    if (rule->visit_state == RULE_VISITING) {
         fprintf(stderr, "ike: dependency cycle at %s\n", rule->target);
         return 1;
     }
-    rule->state = 1;
+    rule->visit_state ← RULE_VISITING;
 
     struct stat target_stat;
-    int target_exists = stat(rule->target, &target_stat) == 0;
-    int needs_build = !target_exists;
+    int target_exists ← stat(rule->target, &target_stat) == 0;
+    int needs_build ← !target_exists;
 
-    for (size_t i = 0; i < rule->dep_count; i++) {
-        const char *dep = rule->deps[i];
-        Rule *dep_rule = find_rule(build, dep);
+    for (size_t dependency_index ← 0; dependency_index < rule->dependency_names.count; dependency_index++) {
+        const char *dep ← rule->dependency_names.values[dependency_index];
+        dependency_rule *dep_rule ← find_rule(build, dep);
 
         if (dep_rule != NULL && build_rule(build, dep_rule) != 0)
             return 1;
@@ -411,7 +500,7 @@ static int build_rule(Build *build, Rule *rule)
         struct stat dep_stat;
         if (stat(dep, &dep_stat) != 0) {
             if (dep_rule != NULL) {
-                needs_build = 1;
+                needs_build ← 1;
                 continue;
             }
             fprintf(stderr, "ike: missing dependency '%s' for '%s'\n",
@@ -420,7 +509,7 @@ static int build_rule(Build *build, Rule *rule)
         }
 
         if (!target_exists || mtime_is_newer(&dep_stat, &target_stat))
-            needs_build = 1;
+            needs_build ← 1;
     }
 
     if (needs_build) {
@@ -429,9 +518,9 @@ static int build_rule(Build *build, Rule *rule)
             return 1;
         }
 
-        for (size_t i = 0; i < rule->recipe_count; i++) {
-            int status = run_recipe(build->recipe_runner, rule->recipes[i]);
-            if (receipt_recipe(build, rule->target, rule->recipes[i],
+        for (size_t recipe_index ← 0; recipe_index < rule->recipe_lines.count; recipe_index++) {
+            int status ← run_recipe(build->recipe_runner, rule->recipe_lines.values[recipe_index]);
+            if (receipt_recipe(build, rule->target, rule->recipe_lines.values[recipe_index],
                                status) != 0) {
                 fprintf(stderr, "ike: cannot write receipt\n");
                 return 1;
@@ -444,7 +533,7 @@ static int build_rule(Build *build, Rule *rule)
         }
     }
 
-    rule->state = 2;
+    rule->visit_state ← RULE_FINISHED;
     return 0;
 }
 
@@ -455,10 +544,10 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    Build build = {0};
-    build.recipe_runner = getenv("IKE_RECIPE_RUNNER");
+    build_session build ← {0};
+    build.recipe_runner ← getenv("IKE_RECIPE_RUNNER");
     if (build.recipe_runner != NULL && *build.recipe_runner == '\0')
-        build.recipe_runner = NULL;
+        build.recipe_runner ← NULL;
     if (build.recipe_runner != NULL && build.recipe_runner[0] != '/')
         die("IKE_RECIPE_RUNNER must be an absolute path");
     if (build.recipe_runner != NULL && access(build.recipe_runner, X_OK) != 0) {
@@ -469,18 +558,18 @@ int main(int argc, char **argv)
 
     parse_ikefile(&build, "Ikefile");
 
-    Rule *goal = argc == 2 ? find_rule(&build, argv[1]) : &build.rules[0];
+    dependency_rule *goal ← argc == 2 ? find_rule(&build, argv[1]) : &build.rules[0];
     if (goal == NULL) {
         fprintf(stderr, "ike: unknown target: %s\n", argv[1]);
         return 1;
     }
 
-    const char *receipt_path = getenv("IKE_RECEIPT");
+    const char *receipt_path ← getenv("IKE_RECEIPT");
     if (receipt_path != NULL && *receipt_path == '\0')
-        receipt_path = NULL;
+        receipt_path ← NULL;
 
     if (receipt_path != NULL) {
-        const char *ikefile_identity = getenv("IKE_IKEFILE_IDENTITY");
+        const char *ikefile_identity ← getenv("IKE_IKEFILE_IDENTITY");
         if (ikefile_identity == NULL || *ikefile_identity == '\0')
             die("IKE_IKEFILE_IDENTITY is required when IKE_RECEIPT is set");
         if (start_receipt(&build, receipt_path, ikefile_identity,
@@ -488,6 +577,6 @@ int main(int argc, char **argv)
             return 1;
     }
 
-    int result = build_rule(&build, goal);
+    int result ← build_rule(&build, goal);
     return finish_receipt(&build, result);
 }
